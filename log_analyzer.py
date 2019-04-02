@@ -13,16 +13,26 @@ from string import Template
 import statistics
 import argparse
 import json
+import logging
+from collections import namedtuple
 
 config = {
     "REPORT_SIZE": 1000,
     "REPORT_DIR": "./reports",
-    "LOG_DIR": "./log"
+    "LOG_DIR": "/home/kgm/otus/homework/badlog",
+    "LOG_FILE": ""
+    #"LOG_FILE": "./analyzer_log/log.txt"
 }
 
+LOG_PARSING_ERROR_PER = 50
 
 lineformat = re.compile(r"""(?P<ipaddress>\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3}) -  - \[(?P<dateandtime>\d{2}\/[a-z]{3}\/\d{4}:\d{2}:\d{2}:\d{2} (\+|\-)\d{4})\] ((\"(GET|POST|DELETE|PATCH|PUT) )(?P<url>.+)(http\/1\.1")) (?P<statuscode>\d{3}) (?P<bytessent>\d+) (["]-["]) (["](?P<refferer>(\-)|(.+))["]) (["]-["]) (["](?P<useragent>(\-)|(.+))["]) (["](?P<requestid>(\-)|(.+))["]) ((?P<requesttime>(\-)|(.+)))""", re.IGNORECASE)
 
+def fined_last_log():
+    Log = namedtuple('Log', ['path', 'date', 'type'])
+    log_file = Log('', '', '')
+
+    return log_file
 
 def exists_file(filename, config_data):
     date = filename[-8:]
@@ -56,7 +66,21 @@ def get_config():
         result['REPORT_SIZE'] = config_json['REPORT_SIZE']
     else:
         result['REPORT_SIZE'] = config['REPORT_SIZE']
+    if 'LOG_FILE' in config_json:
+        result['LOG_FILE'] = config_json['LOG_FILE']
+    elif config['LOG_FILE']:
+        result['LOG_FILE'] = config['LOG_FILE']
+    else:
+        result['LOG_FILE'] = None
     return result
+
+def parse_log(file, log_dir):
+    if file.endswith(".gz"):
+        logfile = gzip.open(os.path.join(log_dir, file))
+    else:
+        logfile = open(os.path.join(log_dir, file))
+    for l in logfile.readlines():
+        yield re.search(lineformat, l)
 
 
 def process(config_data):
@@ -64,36 +88,22 @@ def process(config_data):
     for f in os.listdir(config_data["LOG_DIR"]):
         if exists_file(f, config):
             continue
-        if f.endswith(".gz"):
-            logfile = gzip.open(os.path.join(config_data["LOG_DIR"], f))
-            print("open gz")
-        else:
-            logfile = open(os.path.join(config_data["LOG_DIR"], f))
-            print("open file")
         arr = []
-
-        for l in logfile.readlines():
-            data = re.search(lineformat, l)
-            print("read line")
-            print(data)
-            if data:
-                datadict = data.groupdict()
-                arr.append(datadict)
-                ip = datadict["ipaddress"]
-                datetimestring = datadict["dateandtime"]
-                url = datadict["url"]
-                bytessent = datadict["bytessent"]
-                referrer = datadict["refferer"]
-                useragent = datadict["useragent"]
-                requestid = datadict["requestid"]
-                requesttime = datadict["requesttime"]
-                status = datadict["statuscode"]
-                method = data.group(6)
-                print("print data")
-                print("ip: {}, datetime: {}, url: {}, bytessent: {}, referrer: {}, status: {}, method: {}, useragent: {}, requestid: {}, requesttime: {}".format(ip, datetimestring, url, bytessent, referrer, status, method, useragent, requestid, requesttime))
-
-        logfile.close()
+        unparseable_line_count = 0
+        line_count = 0
+        lines = parse_log(f, config_data['LOG_DIR'])
+        for l in lines:
+            line_count += 1
+            if l:
+                arr.append(l.groupdict())
+            else:
+                unparseable_line_count += 1
     print('#####################################################################################################################################################')
+
+    if unparseable_line_count/line_count * 100 > LOG_PARSING_ERROR_PER:
+        logging.error("More than {} log parsing error percent.".format(LOG_PARSING_ERROR_PER))
+        return
+
     urlCounts = {}
     for a in arr:
         if a['url'] in urlCounts:
@@ -101,11 +111,11 @@ def process(config_data):
         else:
             urlCounts[a['url']] = 1
 
-    for u in urlCounts:
-        print('url: {}, count: {}'.format(u, urlCounts[u]))
+   # for u in urlCounts:
+   #      print('url: {}, count: {}'.format(u, urlCounts[u]))
 
     reportSize = len(arr)
-    print('reportSize: {}'.format(reportSize))
+    # print('reportSize: {}'.format(reportSize))
 
     urlPercent = {}
     for c in urlCounts:
@@ -207,21 +217,13 @@ def process(config_data):
 def main():
     try:
         config_data = get_config()
+        logging.basicConfig(format='[%(asctime)s] %(levelname).1s %(message)s', level=logging.INFO,
+                            datefmt='%Y.%m.%d %H:%M:%S', filename=config_data['LOG_FILE'])
         process(config_data)
-    except IOError as e:
-        print("File error : {}".format(str(e)))
-        return
-    except json.JSONDecodeError as e:
-        print('JSONDecodeError - msg: {}, doc: {}, pos: {}, lineno: {}, colno: {}'.format(
-            e.msg, e.doc, e.pos, e.lineno, e.colno))
-        return
     except Exception as e:
-        print("Exception : {}".format(str(e)))
+        logging.exception(e)
         return
-    #except:
-        #print("Unexpected error: {}".format(sys.exc_info()[0]))
-        #return 1
-    print('done')
+    logging.info('done')
 
 
 if __name__ == "__main__":
