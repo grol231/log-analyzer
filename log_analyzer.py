@@ -19,7 +19,7 @@ from datetime import datetime
 
 config = {
     "REPORT_SIZE": 1000,
-    "REPORT_DIR": "./reports",
+    "REPORT_DIR": "./cdreports",
     "LOG_DIR": "./log",
     "ANALYZER_LOG": ""
 }
@@ -187,9 +187,6 @@ def process(config_data):
     if unhandled_line_count/line_count * 100 > LOG_PARSING_ERROR_PER:
         logging.error("More than {}% lines with parsing errors.".format(LOG_PARSING_ERROR_PER))
         return
-    for e in log:
-        print('url: {}, time:{}'.format(e['url'], e['time']))
-
     url_counts = get_url_counts(log)
     url_percents = get_url_percents(url_counts, len(log))
     url_time_sums = get_url_time_sums(log)
