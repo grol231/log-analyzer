@@ -25,7 +25,7 @@ config = {
 }
 LOG_PARSING_ERROR_PER = 50
 REPORT_TEMPLATE_PATH = 'template/report.html'
-line_format = re.compile(r"""(?P<ipaddress>\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3}) -  - \[(?P<dateandtime>\d{2}\/[a-z]{3}\/\d{4}:\d{2}:\d{2}:\d{2} (\+|\-)\d{4})\] ((\"(GET|POST|DELETE|PATCH|PUT) )(?P<url>.+)(http\/1\.1")) (?P<statuscode>\d{3}) (?P<bytessent>\d+) (["]-["]) (["](?P<refferer>(\-)|(.+))["]) (["]-["]) (["](?P<useragent>(\-)|(.+))["]) (["](?P<id>(\-)|(.+))["]) ((?P<time>(\-)|(.+)))""", re.IGNORECASE)
+line_format = re.compile(r"""(\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3}) -  - \[(\d{2}\/[a-z]{3}\/\d{4}:\d{2}:\d{2}:\d{2} (\+|\-)\d{4})\] ((\"(GET|POST|DELETE|PATCH|PUT) )(?P<url>.+)(http\/1\.1")) (\d{3}) (\d+) (["]-["]) (["]((\-)|(.+))["]) (["]-["]) (["]((\-)|(.+))["]) (["]((\-)|(.+))["]) ((?P<time>(\-)|(.+)))""", re.IGNORECASE)
 log_nginx_format = re.compile(r"""nginx-access-ui.log-(?P<date>\d[0-9]+)(.gz|$)""")
 
 
@@ -99,7 +99,7 @@ def get_url_counts(log):
     url_counts = {}
     for line in log:
         if line['url'] in url_counts:
-            ++url_counts[line['url']]
+            url_counts[line['url']] += 1
         else:
             url_counts[line['url']] = 1
     return url_counts
@@ -187,6 +187,9 @@ def process(config_data):
     if unhandled_line_count/line_count * 100 > LOG_PARSING_ERROR_PER:
         logging.error("More than {}% lines with parsing errors.".format(LOG_PARSING_ERROR_PER))
         return
+    for e in log:
+        print('url: {}, time:{}'.format(e['url'], e['time']))
+
     url_counts = get_url_counts(log)
     url_percents = get_url_percents(url_counts, len(log))
     url_time_sums = get_url_time_sums(log)
