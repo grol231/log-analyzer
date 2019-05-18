@@ -19,7 +19,7 @@ from datetime import datetime
 
 config = {
     "REPORT_SIZE": 1000,
-    "REPORT_DIR": "./cdreports",
+    "REPORT_DIR": "./reports",
     "LOG_DIR": "./log",
     "ANALYZER_LOG": ""
 }
@@ -36,11 +36,10 @@ def get_last_log(log_dir):
         match = re.search(log_nginx_format, file_name)
         if match is None:
             continue
-        else:
-            date_str = match.groupdict()['date']
-            date = datetime.strptime(date_str, '%Y%m%d')
-        path = log_dir + '/' + file_name
-        extension = 'gz' if 'gz' == file_name[-2:] else 'plain'
+        date_str = match.groupdict()['date']
+        date = datetime.strptime(date_str, '%Y%m%d')
+        path = os.path.join(log_dir, file_name)
+        extension = 'gz' if 'gz' == file_name[-2:] else ''
         if last_log:
             if last_log.date < date:
                 last_log = LogFile(path, date, extension)
@@ -62,8 +61,8 @@ def get_config():
     global config
     if os.stat(config_file_path).st_size == 0:
         return config
-    config_file = open(config_file_path)
-    config_json = json.load(config_file)
+    with open(config_file_path) as config_file:
+        config_json = json.load(config_file)
     result = {}
     if 'LOG_DIR' in config_json:
         result['LOG_DIR'] = config_json['LOG_DIR']
@@ -86,147 +85,99 @@ def get_config():
     return result
 
 
-def parse_log(path, extension):
-    logfile = gzip.open(path) if 'gz' == extension else open(path)
-    for l in logfile.readlines():
-        if 'gz' == extension:
-            yield re.search(line_format, l.decode('utf-8'))
-        else:
-            yield re.search(line_format, l)
-
-
-def get_url_counts(log):
-    url_counts = {}
-    for line in log:
-        if line['url'] in url_counts:
-            url_counts[line['url']] += 1
-        else:
-            url_counts[line['url']] = 1
-    return url_counts
-
-
-def get_url_percents(url_counts, log_size):
-    url_percent = {}
-    for url in url_counts:
-        url_percent[url] = url_counts[url]/log_size * 100
-    return url_percent
-
-
-def get_url_time_sums(log):
-    url_time_sums = {}
-    for line in log:
-        if line['url'] in url_time_sums:
-            url_time_sums[line['url']] += float(line['time'])
-        else:
-            url_time_sums[line['url']] = float(line['time'])
-    return url_time_sums
-
-
-def get_request_common_time(url_time_sums):
-    request_common_time = 0
-    for url in url_time_sums:
-        request_common_time += url_time_sums[url]
-    return request_common_time
-
-
-def get_url_time_percents(url_time_sums, request_common_time):
-    url_time_percents = {}
-    for url in url_time_sums:
-        url_time_percents[url] = url_time_sums[url]/request_common_time * 100
-    return url_time_percents
-
-
-def get_url_avg_times(url_time_sums, url_counts):
-    url_avg_times = {}
-    for url in url_counts:
-        url_avg_times[url] = url_time_sums[url] / url_counts[url]
-    return url_avg_times
-
-
-def get_url_time_max(log):
-    url_time_max = {}
-    for line in log:
-        if line['url'] not in url_time_max:
-            url_time_max[line['url']] = line['time']
-        else:
-            if line['time'] > url_time_max[line['url']]:
-                url_time_max[line['url']] = line['time']
-    return url_time_max
-
-
-def get_url_time_medians(log):
-    request_times = {}
-    for line in log:
-        if line['url'] in request_times:
-            request_times[line['url']].append(float(line['time']))
-        else:
-            request_times[line['url']] = []
-            request_times[line['url']].append(float(line['time']))
-    url_time_medians = {}
-    for url in request_times:
-        url_time_medians[url] = statistics.median(request_times[url])
-    return url_time_medians
-
-
-def process(config_data):
-    last_log = get_last_log(config_data['LOG_DIR'])
-    if last_log:
-        if is_processed(last_log.date, config_data['REPORT_DIR']):
-            logging.info('Log already processed.')
-            return
-        log = []
+def parse_log(last_log, report_dir):
+    if last_log is False:
+        raise Exception('there is not log file in the log dir')
+    elif is_processed(last_log.date, report_dir):
+        raise Exception('log already processed')
+    with (gzip.open(last_log.path, mode='rt', encoding='utf-8') if 'gz' == last_log.extension else\
+                                                open(last_log.path, encoding='utf-8')) as logfile:
         unhandled_line_count = 0
-        line_count = 0
-        lines = parse_log(last_log.path, last_log.extension)
-        for l in lines:
-            line_count += 1
-            if l:
-                log.append(l.groupdict())
+        for idx, line in enumerate(logfile.readlines()):
+            log_size = idx + 1
+            data = re.search(line_format, line)
+            if data:
+                yield data.groupdict(), log_size
             else:
                 unhandled_line_count += 1
-    if unhandled_line_count/line_count * 100 > LOG_PARSING_ERROR_PER:
-        logging.error("More than {}% lines with parsing errors.".format(LOG_PARSING_ERROR_PER))
-        return
-    url_counts = get_url_counts(log)
-    url_percents = get_url_percents(url_counts, len(log))
-    url_time_sums = get_url_time_sums(log)
-    request_common_time = get_request_common_time(url_time_sums)
-    url_time_percents = get_url_time_percents(url_time_sums, request_common_time)
-    url_avg_times = get_url_avg_times(url_time_sums, url_counts)
-    url_time_max = get_url_time_max(log)
-    url_time_medians = get_url_time_medians(log)
-    report_url_time_sums = sorted(url_time_sums.items(), key=lambda kv: kv[1], reverse=True)[0:1000]
+                if unhandled_line_count / log_size * 100 > LOG_PARSING_ERROR_PER:
+                    raise Exception("more than {}% lines with parsing errors".format(LOG_PARSING_ERROR_PER))
+
+
+def calculate_statistic(log):
+    url_list = []
+    request_counts = {}
+    request_time_amounts = {}
+    request_time_peaks = {}
+    request_time_lists = {}
+    for line, log_size in log:
+        url = line['url']
+        time = line['time']
+        if url in url_list:
+            request_counts[url] += 1
+            request_time_amounts[url] += float(time)
+            request_time_lists[url].append(float(time))
+            if time > request_time_peaks[url]:
+                request_time_peaks[url] = time
+        else:
+            url_list.append(url)
+            request_counts[url] = 1
+            request_time_amounts[url] = float(time)
+            request_time_peaks[url] = time
+            request_time_lists[url] = []
+            request_time_lists[url].append(float(time))
+
+    common_request_time = sum(request_time_amounts.values())
+    request_time_medians = {}
+    request_count_percents = {}
+    request_time_percents = {}
+    average_request_times = {}
     table_json = []
-    for s in report_url_time_sums:
-        url = s[0]
+    for url in url_list:
+        request_time_medians[url] = statistics.median(request_time_lists[url])
+        request_count_percents[url] = request_counts[url]/log_size * 100
+        request_time_percents[url] = request_time_amounts[url]/common_request_time * 100
+        average_request_times[url] = request_time_amounts[url]/request_counts[url]
         line = {
-            'count': url_counts[url],
-            'time_avg': url_avg_times[url],
-            'time_max': url_time_max[url],
-            'time_sum': s[1],
+            'count': request_counts[url],
+            'time_avg': average_request_times[url],
+            'time_max': request_time_peaks[url],
+            'time_sum': request_time_amounts[url],
             'url': url,
-            'time_med': url_time_medians[url],
-            'time_perc': url_time_percents[url],
-            'count_perc': url_percents[url]
+            'time_med': request_time_medians[url],
+            'time_perc': request_time_percents[url],
+            'count_perc': request_count_percents[url]
         }
         table_json.append(line)
-    report_template = open(REPORT_TEMPLATE_PATH, 'r').read()
-    template = Template(report_template)
-    report = template.safe_substitute(table_json=table_json)
-    open(config_data['REPORT_DIR'] + '/' + 'report_' + last_log.date.strftime('%Y%m%d') + '.html', 'w').write(report)
+    return table_json
 
 
 def main():
-    try:
-        config_data = get_config()
-        logging.basicConfig(format='[%(asctime)s] %(levelname).1s %(message)s', level=logging.INFO,
-                            datefmt='%Y.%m.%d %H:%M:%S', filename=config_data['ANALYZER_LOG'])
-        process(config_data)
-    except Exception as e:
-        logging.exception(e)
-        return
+    config_data = get_config()
+    logging.basicConfig(format='[%(asctime)s] %(levelname).1s %(message)s', level=logging.INFO,
+                        datefmt='%Y.%m.%d %H:%M:%S', filename=config_data['ANALYZER_LOG'])
+
+    last_log = get_last_log(config_data['LOG_DIR'])
+    data = parse_log(last_log, config_data['REPORT_DIR'])
+    table_json = calculate_statistic(data)
+
+    with open(REPORT_TEMPLATE_PATH, 'r', encoding='utf-8') as template_file:
+        report_template = template_file.read()
+    template = Template(report_template)
+    report = template.safe_substitute(table_json=table_json)
+    if os.path.exists(config_data['REPORT_DIR']) is False:
+        os.mkdir(config_data['REPORT_DIR'])
+    report_path = config_data['REPORT_DIR'] + '/' + 'report_' + last_log.date.strftime('%Y%m%d') + '.html'
+    with open(report_path, 'w') as report_file:
+        report_file.write(report)
     logging.info('analyze completed successfully')
 
 
 if __name__ == "__main__":
-    main()
+    try:
+        main()
+    except Exception as e:
+        logging.error(e)
+        logging.info('analysis aborted')
+
+
